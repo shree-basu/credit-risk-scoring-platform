@@ -1,0 +1,34 @@
+# ---- Secrets / credentials (NEVER commit these) ----
+*.json
+!package.json
+credentials/
+*.pem
+*.key
+.env
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# ---- Terraform ----
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+crash.log
+
+# ---- Spark / data ----
+spark-warehouse/
+*.parquet
+data/output/
+
+# ---- Editors / OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
