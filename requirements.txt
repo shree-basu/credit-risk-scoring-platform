@@ -1,0 +1,9 @@
+google-cloud-storage
+google-cloud-bigquery
+google-cloud-aiplatform
+pyspark
+pandas
+numpy
+scikit-learn
+faker
+pytest
