@@ -8,10 +8,11 @@ import hashlib
 import math
 import random
 import shutil
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Final, Iterable
+from typing import Final
 
 from data.simulator.contracts import (
     ENTITIES_BY_DATASET,
@@ -124,7 +125,7 @@ def _application_timestamp(config: GenerationConfig, rng: random.Random) -> date
         rng.randint(0, 23),
         rng.randint(0, 59),
         rng.randint(0, 59),
-        tzinfo=timezone.utc,
+        tzinfo=timezone.utc,  # noqa: UP017 - keeps local Spark validation Python 3.10 compatible
     )
 
 
@@ -212,9 +213,7 @@ def generate_batch(config: GenerationConfig) -> Path:
             staging_dir / "borrower_profiles.csv", PROFILE_FIELDS, entities["borrower_profiles"]
         )
         if config.dataset_type == "training":
-            _write_csv(
-                staging_dir / "loan_outcomes.csv", OUTCOME_FIELDS, entities["loan_outcomes"]
-            )
+            _write_csv(staging_dir / "loan_outcomes.csv", OUTCOME_FIELDS, entities["loan_outcomes"])
         write_manifest(staging_dir, layout)
         (staging_dir / "_SUCCESS").write_text("", encoding="utf-8")
         validate_local_batch(staging_dir, layout)

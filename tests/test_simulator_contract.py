@@ -16,7 +16,9 @@ from data.simulator.generate_loans import (
 )
 
 
-def _config(root: Path, dataset_type: str = "training", scenario: str = "normal") -> GenerationConfig:
+def _config(
+    root: Path, dataset_type: str = "training", scenario: str = "normal"
+) -> GenerationConfig:
     return GenerationConfig(
         dataset_type=dataset_type,
         partition_date=date(2026, 8, 30),
