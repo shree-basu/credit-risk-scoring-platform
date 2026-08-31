@@ -50,7 +50,11 @@ class BatchLayout:
 
     @property
     def generated_at(self) -> str:
-        timestamp = datetime.combine(self.partition_date, time.min, tzinfo=timezone.utc)
+        timestamp = datetime.combine(
+            self.partition_date,
+            time.min,
+            tzinfo=timezone.utc,  # noqa: UP017 - keeps local Spark validation Python 3.10 compatible
+        )
         return timestamp.isoformat().replace("+00:00", "Z")
 
 
