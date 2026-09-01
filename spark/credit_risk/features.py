@@ -2,32 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Final
-
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql.types import DecimalType
 
-FEATURE_VERSION: Final = "v1"
-
-# Identity and policy-sensitive audit fields (including age) are deliberately excluded.
-MODEL_FEATURE_ALLOWLIST: Final = (
-    "annual_income",
-    "employment_years",
-    "credit_score",
-    "existing_debt",
-    "home_ownership",
-    "loan_amount",
-    "loan_term_months",
-    "interest_rate",
-    "loan_purpose",
-    "debt_to_income",
-    "loan_to_income",
-    "estimated_monthly_payment",
-    "payment_to_income",
-    "credit_score_band",
-    "employment_stability",
-)
+from credit_risk.feature_contract import FEATURE_VERSION, MODEL_FEATURE_ALLOWLIST
 
 
 def build_feature_frame(joined: DataFrame, *, mode: str) -> DataFrame:
