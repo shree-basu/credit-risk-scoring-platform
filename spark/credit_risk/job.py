@@ -8,14 +8,14 @@ from pathlib import Path
 
 from pyspark.sql import SparkSession
 
-from .features import FEATURE_VERSION
-from .io import (
+from spark.credit_risk.features import FEATURE_VERSION
+from spark.credit_risk.io import (
     deterministic_staging_table,
     read_source_frames,
     write_bigquery_staging,
     write_local,
 )
-from .quality import build_validated_features
+from spark.credit_risk.quality import build_validated_features
 
 
 def parse_args() -> argparse.Namespace:

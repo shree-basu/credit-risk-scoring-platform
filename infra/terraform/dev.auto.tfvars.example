@@ -1,0 +1,6 @@
+# Safe example: all managed-resource collections remain empty.
+project_id              = "replace-me"
+deployment_enabled      = false
+deployment_confirmation = ""
+enable_composer         = false
+composer_confirmation   = ""

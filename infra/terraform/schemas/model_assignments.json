@@ -1,0 +1,11 @@
+[
+  {"name":"model_resource","type":"STRING","mode":"REQUIRED"},
+  {"name":"model_version","type":"STRING","mode":"REQUIRED"},
+  {"name":"feature_version","type":"STRING","mode":"REQUIRED"},
+  {"name":"status","type":"STRING","mode":"REQUIRED"},
+  {"name":"effective_from","type":"TIMESTAMP","mode":"REQUIRED"},
+  {"name":"effective_to","type":"TIMESTAMP","mode":"NULLABLE"},
+  {"name":"promoted_by","type":"STRING","mode":"REQUIRED"},
+  {"name":"promotion_run_id","type":"STRING","mode":"REQUIRED"},
+  {"name":"recorded_at","type":"TIMESTAMP","mode":"REQUIRED"}
+]

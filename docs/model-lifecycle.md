@@ -33,8 +33,9 @@ literal `PROMOTE`, an eligible candidate, an actor, and an effective timestamp. 
 promotion path exists.
 
 Aliases are mutable pointers, while immutable model/version and feature-version fields are retained
-in scoring and audit records. Historical backfills must resolve the model assignment effective for
-their score date rather than silently using today's champion; orchestration for that rule is Day 4.
+in scoring and audit records. Historical backfills resolve the model assignment effective for their
+score date rather than silently using today's champion. Scheduled retraining requires an existing
+fully qualified parent model, so bootstrap registration remains a separate reviewed operation.
 
 ## Prediction contract
 

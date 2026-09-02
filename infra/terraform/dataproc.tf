@@ -1,24 +1,29 @@
-resource "google_dataproc_cluster" "feature_cluster" {
-name   = "credit-risk-feature-cluster"
-region = var.region
-cluster_config {
+resource "google_service_account" "workload" {
+  for_each = local.deployment_requested ? toset(["spark", "vertex"]) : toset([])
 
+  project      = var.project_id
+  account_id   = "credit-risk-${each.key}"
+  display_name = "Credit risk ${each.key} workload"
 
-master_config {
-  num_instances = 1
-  machine_type  = "n1-standard-2"
+  lifecycle {
+    prevent_destroy = true
+  }
+
+  depends_on = [google_project_service.core]
 }
 
-worker_config {
-  num_instances = 2
-  machine_type  = "n1-standard-2"
-}
+resource "google_service_account" "composer" {
+  for_each = local.composer
 
-software_config {
-  image_version = "2.1-debian11"
-}
+  project      = var.project_id
+  account_id   = "credit-risk-composer"
+  display_name = "Credit risk Composer orchestration"
 
-}
+  lifecycle {
+    prevent_destroy = true
+  }
+
+  depends_on = [google_project_service.composer]
 }
 
 

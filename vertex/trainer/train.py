@@ -183,18 +183,70 @@ def _load_result_for_copy(source: Path) -> TrainingResult:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True, help="Local CSV or Parquet feature snapshot")
+    parser.add_argument(
+        "--input", required=True, help="Local path or fully qualified BigQuery table"
+    )
+    parser.add_argument("--input-mode", choices=("local", "bigquery"), default="local")
+    parser.add_argument("--project-id")
+    parser.add_argument("--batch-id")
+    parser.add_argument("--confirm-cloud-read")
     parser.add_argument("--model-version", required=True)
     parser.add_argument("--training-snapshot", required=True, type=date.fromisoformat)
     parser.add_argument("--output", default=os.environ.get("AIP_MODEL_DIR", "artifacts/model"))
     parser.add_argument("--confirm-cloud-write")
+    parser.add_argument("--fail-on-rejected", action="store_true")
     return parser
+
+
+def read_training_frame(
+    *,
+    source: str,
+    input_mode: str,
+    project_id: str | None,
+    batch_id: str | None,
+    training_snapshot: date,
+    confirmation: str | None,
+) -> pd.DataFrame:
+    if input_mode == "local":
+        if source.startswith("gs://"):
+            raise RuntimeError("gs:// input is not a local input")
+        path = Path(source)
+        return pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_csv(path)
+    if confirmation != "BIGQUERY":
+        raise RuntimeError("BigQuery training input requires --confirm-cloud-read BIGQUERY")
+    if not project_id or not source.startswith(f"{project_id}."):
+        raise ValueError("BigQuery input must be a table in the explicitly configured project")
+    if not batch_id:
+        raise ValueError("BigQuery training input requires an immutable batch_id")
+    from google.cloud import bigquery  # imported only after the explicit safety gate
+
+    query = f"""
+        SELECT *
+        FROM `{source}`
+        WHERE feature_date = @training_snapshot
+          AND batch_id = @batch_id
+          AND feature_version = @feature_version
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("training_snapshot", "DATE", training_snapshot),
+            bigquery.ScalarQueryParameter("batch_id", "STRING", batch_id),
+            bigquery.ScalarQueryParameter("feature_version", "STRING", FEATURE_VERSION),
+        ]
+    )
+    return bigquery.Client(project=project_id).query(query, job_config=job_config).to_dataframe()
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    source = Path(args.input)
-    frame = pd.read_parquet(source) if source.suffix == ".parquet" else pd.read_csv(source)
+    frame = read_training_frame(
+        source=args.input,
+        input_mode=args.input_mode,
+        project_id=args.project_id,
+        batch_id=args.batch_id,
+        training_snapshot=args.training_snapshot,
+        confirmation=args.confirm_cloud_read,
+    )
     config = TrainingConfig(
         model_version=args.model_version,
         training_snapshot=args.training_snapshot,
@@ -206,6 +258,8 @@ def main() -> None:
     write_artifacts(result, local_output)
     if args.output.startswith("gs://"):
         _upload_artifacts(local_output, args.output, args.confirm_cloud_write)
+    if args.fail_on_rejected and result.metadata["status"] != "CANDIDATE":
+        raise RuntimeError("Candidate quality gates failed; model registration is blocked")
     print(json.dumps({"metadata": result.metadata, "metrics": result.metrics}, sort_keys=True))
 
 
