@@ -1,6 +1,7 @@
 # ---- Secrets / credentials (NEVER commit these) ----
 *.json
 !package.json
+!infra/terraform/schemas/*.json
 credentials/
 *.pem
 *.key

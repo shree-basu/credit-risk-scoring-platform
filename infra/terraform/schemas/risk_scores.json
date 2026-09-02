@@ -1,0 +1,12 @@
+[
+  {"name":"loan_id","type":"STRING","mode":"REQUIRED"},
+  {"name":"borrower_id","type":"STRING","mode":"REQUIRED"},
+  {"name":"score_date","type":"DATE","mode":"REQUIRED"},
+  {"name":"probability_of_default","type":"NUMERIC","mode":"REQUIRED"},
+  {"name":"risk_band","type":"STRING","mode":"REQUIRED"},
+  {"name":"model_resource","type":"STRING","mode":"REQUIRED"},
+  {"name":"model_version","type":"STRING","mode":"REQUIRED"},
+  {"name":"feature_version","type":"STRING","mode":"REQUIRED"},
+  {"name":"pipeline_run_id","type":"STRING","mode":"REQUIRED"},
+  {"name":"scored_at","type":"TIMESTAMP","mode":"REQUIRED"}
+]

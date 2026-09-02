@@ -1,0 +1,9 @@
+[
+  {"name":"run_id","type":"STRING","mode":"REQUIRED"},
+  {"name":"business_date","type":"DATE","mode":"REQUIRED"},
+  {"name":"check_name","type":"STRING","mode":"REQUIRED"},
+  {"name":"status","type":"STRING","mode":"REQUIRED"},
+  {"name":"observed_value","type":"NUMERIC","mode":"NULLABLE"},
+  {"name":"expected_value","type":"NUMERIC","mode":"NULLABLE"},
+  {"name":"checked_at","type":"TIMESTAMP","mode":"REQUIRED"}
+]

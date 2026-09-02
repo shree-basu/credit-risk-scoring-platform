@@ -1,0 +1,12 @@
+title: CreditRiskPrediction
+type: object
+required:
+  - probability_of_default
+  - risk_band
+  - model_version
+  - feature_version
+properties:
+  probability_of_default: {type: number, minimum: 0, maximum: 1}
+  risk_band: {type: string, enum: [LOW, MEDIUM, HIGH]}
+  model_version: {type: string}
+  feature_version: {type: string}

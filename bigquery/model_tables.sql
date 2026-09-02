@@ -36,6 +36,7 @@ PARTITION BY training_snapshot
 CLUSTER BY status, model_version;
 
 CREATE TABLE IF NOT EXISTS `credit_risk_audit.model_assignments` (
+  model_resource STRING NOT NULL,
   model_version STRING NOT NULL,
   feature_version STRING NOT NULL,
   status STRING NOT NULL,

@@ -12,7 +12,12 @@ from monitoring.drift import build_drift_metric, population_stability_index
 from vertex.governance import candidate_from_metadata, promote_candidate
 from vertex.predictor.app import create_app
 from vertex.registry import upload_candidate
-from vertex.trainer.train import TrainingConfig, train_candidate, write_artifacts
+from vertex.trainer.train import (
+    TrainingConfig,
+    read_training_frame,
+    train_candidate,
+    write_artifacts,
+)
 
 
 def training_frame(size: int = 120) -> pd.DataFrame:
@@ -94,6 +99,18 @@ def test_training_rejects_feature_contract_mismatch() -> None:
         train_candidate(frame, config())
 
 
+def test_bigquery_training_input_fails_before_cloud_import() -> None:
+    with pytest.raises(RuntimeError, match="confirm-cloud-read BIGQUERY"):
+        read_training_frame(
+            source="never-used.credit_risk_features.training_features",
+            input_mode="bigquery",
+            project_id="never-used",
+            batch_id="training-20260831",
+            training_snapshot=date(2026, 8, 31),
+            confirmation=None,
+        )
+
+
 def test_artifact_round_trip_and_vertex_compatible_prediction(tmp_path) -> None:
     result = train_candidate(training_frame(), config())
     write_artifacts(result, tmp_path)
@@ -135,16 +152,19 @@ def test_promotion_is_explicit_and_audited() -> None:
         promote_candidate(
             candidate,
             confirmation="no",
+            model_resource="projects/example/locations/us-central1/models/123@2",
             promoted_by="owner@example.test",
             effective_from=datetime(2026, 9, 1, tzinfo=UTC),
         )
     active = promote_candidate(
         candidate,
         confirmation="PROMOTE",
+        model_resource="projects/example/locations/us-central1/models/123@2",
         promoted_by="owner@example.test",
         effective_from=datetime(2026, 9, 1, tzinfo=UTC),
     )
     assert active.status == "ACTIVE"
+    assert active.model_resource.endswith("@2")
     assert active.promoted_by == "owner@example.test"
 
 
