@@ -1,0 +1,128 @@
+name: Cloud-free CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-free-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  GOOGLE_APPLICATION_CREDENTIALS: ""
+  CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: ""
+
+jobs:
+  quality:
+    name: Python quality and local contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements-ml.txt
+            requirements.txt
+      - name: Install cloud-free dependencies
+        run: pip install -r requirements-ml.txt Faker==37.1.0 pytest==8.3.5 ruff==0.11.12
+      - name: Lint, format, and compile
+        run: |
+          ruff check .
+          ruff format --check .
+          python -m compileall -q credit_risk data dags monitoring spark vertex tests scripts
+      - name: Run non-Spark, non-Airflow tests
+        run: pytest -q tests/test_simulator_contract.py tests/test_model_lifecycle.py tests/test_orchestration_contract.py
+      - name: Check repository and workflow safety
+        run: |
+          python scripts/check_repository_safety.py
+          python scripts/check_cloud_free_ci.py
+          python -m pip check
+
+  spark-tests:
+    name: PySpark 3.5.3 on Python 3.11 / Java 17
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYSPARK_PYTHON: python
+      SPARK_LOCAL_IP: 127.0.0.1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-spark.txt
+      - name: Verify Java runtime
+        run: java -version
+      - name: Install Spark test dependencies
+        run: pip install -r requirements-spark.txt pytest==8.3.5
+      - name: Run local Spark contract tests
+        run: pytest -q tests/test_spark_features.py
+
+  dagbag:
+    name: Composer-compatible Airflow DagBag
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AIRFLOW_HOME: ${{ github.workspace }}/.airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__CORE__UNIT_TEST_MODE: "True"
+      AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: "120"
+      PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/dags
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-airflow.txt
+      - name: Install pinned Airflow and Google provider
+        run: >-
+          pip install -r requirements-airflow.txt
+          --constraint https://raw.githubusercontent.com/apache/airflow/constraints-2.11.1/constraints-3.11.txt
+      - name: Import both DAGs without cloud credentials
+        run: pytest -q tests/test_dagbag.py
+
+  terraform:
+    name: Terraform static validation only
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.14.5
+          terraform_wrapper: false
+      - name: Format check
+        run: terraform fmt -recursive -check
+        working-directory: infra/terraform
+      - name: Backend-disabled initialization
+        run: terraform init -backend=false -input=false
+        working-directory: infra/terraform
+      - name: Validate configuration
+        run: terraform validate
+        working-directory: infra/terraform
+
+  container-build:
+    name: Local Vertex container builds (no push)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build trainer image locally
+        run: docker build --file vertex/trainer/Dockerfile --tag credit-risk-trainer:ci .
+      - name: Build predictor image locally
+        run: docker build --file vertex/predictor/Dockerfile --tag credit-risk-predictor:ci .
+      - name: Inspect local image metadata
+        run: |
+          docker image inspect credit-risk-trainer:ci
+          docker image inspect credit-risk-predictor:ci

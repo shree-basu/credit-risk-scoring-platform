@@ -1,0 +1,3 @@
+apache-airflow==2.11.1
+apache-airflow-providers-google==19.5.0
+pytest==8.2.1

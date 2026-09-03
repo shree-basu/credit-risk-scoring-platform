@@ -1,0 +1,5 @@
+# Optional operator/runtime dependencies. Installing these does not authenticate
+# or execute a cloud operation; every cloud code path still requires its token.
+google-cloud-aiplatform==1.138.0
+google-cloud-bigquery==3.40.1
+google-cloud-storage==3.9.0

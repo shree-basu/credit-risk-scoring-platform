@@ -15,6 +15,8 @@ __pycache__/
 venv/
 env/
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
 # ---- Terraform ----
 .terraform/
@@ -27,6 +29,11 @@ crash.log
 spark-warehouse/
 *.parquet
 data/output/
+artifacts/
+
+# ---- Local container/coverage output ----
+.coverage
+htmlcov/
 
 # ---- Editors / OS ----
 .vscode/

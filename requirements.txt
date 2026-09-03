@@ -1,9 +1,7 @@
-google-cloud-storage
-google-cloud-bigquery
-google-cloud-aiplatform
-pyspark
-pandas
-numpy
-scikit-learn
-faker
-pytest
+# Local development and cloud-free validation. Cloud integrations keep their
+# runtime-specific dependencies in the component requirement files.
+-r requirements-ml.txt
+-r requirements-spark.txt
+Faker==37.1.0
+pytest==8.3.5
+ruff==0.11.12

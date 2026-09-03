@@ -63,6 +63,6 @@ artifacts, register models, run BigQuery, create endpoints, or submit Vertex job
 and SQL definitions are inert until an operator separately builds/pushes an image or executes cloud
 commands. No such operation was performed as evidence for this repository.
 
-The Spark suite is defined for Python 3.11, matching the documented managed runtime. It passed during
-Day 2 validation. The Day 3 Windows host exposes only Python 3.12/3.13, so its attempted Spark rerun
-could not start compatible Python workers; this is an environment limitation, not passing evidence.
+The Spark suite is defined for Python 3.11, matching the documented managed runtime. The final CI
+runs it on Linux with Python 3.11 and Java 17. Host-specific local results are not used to broaden
+the supported runtime claim.
