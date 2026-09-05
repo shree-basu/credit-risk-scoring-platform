@@ -1,14 +1,25 @@
-output "raw_bucket" { 
-    description = "Name of the GCS raw data bucket" 
-    value = google_storage_bucket.raw_data.name 
-    } 
-    
-output "dataset" { 
-    description = "Name of the dataset in bigquery" 
-    value = google_bigquery_dataset.credit_risk.dataset_id 
-    } 
-    
-output "dataproc_cluster" { 
-    description = "Name of the dataproc cluster on GCP" 
-    value = google_dataproc_cluster.feature_cluster.name 
+output "deployment_requested" {
+  description = "True only after both explicit core deployment gates are open."
+  value       = local.deployment_requested
+}
+
+output "composer_requested" {
+  description = "True only after the separate Composer gates are also open."
+  value       = local.composer_requested
+}
+
+output "raw_bucket" {
+  value = try(google_storage_bucket.data["raw"].name, null)
+}
+
+output "artifact_bucket" {
+  value = try(google_storage_bucket.data["artifacts"].name, null)
+}
+
+output "spark_service_account" {
+  value = try(google_service_account.workload["spark"].email, null)
+}
+
+output "vertex_service_account" {
+  value = try(google_service_account.workload["vertex"].email, null)
 }

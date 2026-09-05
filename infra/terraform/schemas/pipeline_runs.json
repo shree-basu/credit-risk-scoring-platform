@@ -1,0 +1,16 @@
+[
+  {"name":"run_id","type":"STRING","mode":"REQUIRED"},
+  {"name":"dag_id","type":"STRING","mode":"REQUIRED"},
+  {"name":"logical_date","type":"TIMESTAMP","mode":"REQUIRED"},
+  {"name":"batch_id","type":"STRING","mode":"REQUIRED"},
+  {"name":"status","type":"STRING","mode":"REQUIRED"},
+  {"name":"started_at","type":"TIMESTAMP","mode":"REQUIRED"},
+  {"name":"completed_at","type":"TIMESTAMP","mode":"NULLABLE"},
+  {"name":"source_count","type":"INTEGER","mode":"NULLABLE"},
+  {"name":"accepted_count","type":"INTEGER","mode":"NULLABLE"},
+  {"name":"quarantined_count","type":"INTEGER","mode":"NULLABLE"},
+  {"name":"feature_count","type":"INTEGER","mode":"NULLABLE"},
+  {"name":"score_count","type":"INTEGER","mode":"NULLABLE"},
+  {"name":"model_version","type":"STRING","mode":"NULLABLE"},
+  {"name":"feature_version","type":"STRING","mode":"NULLABLE"}
+]
