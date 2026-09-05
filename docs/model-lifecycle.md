@@ -41,12 +41,20 @@ fully qualified parent model, so bootstrap registration remains a separate revie
 
 The Flask app implements configurable Vertex health and predict routes and listens on port 8080 in
 the container. At container startup it reads local artifacts or downloads the exact artifacts from
-Vertex's `AIP_STORAGE_URI`. It expects a non-empty `instances` list, rejects missing allowlisted features, and
-returns `loan_id`, `borrower_id`, probability, risk band, model version, and feature version.
+Vertex's `AIP_STORAGE_URI`. It expects a non-empty `instances` list, rejects missing allowlisted
+features, and returns `loan_id`, `borrower_id`, probability, risk band, model version, and feature
+version. The batch request explicitly sets `instance_type` to `object` and allowlists the named
+lineage, version, and model-feature fields, so a BigQuery row reaches the custom predictor as a
+dictionary rather than a positional array.
 
 This design is for Vertex batch prediction with BigQuery input/output. It does not provision or
 claim an online endpoint. BigQuery score publication is replay-safe on
 `(loan_id, score_date, model_version)` and retains the pipeline run id.
+
+Provider 19.5.0 does not expose Vertex `instance_config` through its high-level batch-prediction
+operator. The daily DAG therefore uses one narrowly scoped Python callable backed by the provider's
+authenticated hook to submit the underlying request and wait for completion. This is implemented
+and statically tested, but not authenticated cloud-runtime evidence.
 
 ## Drift
 
