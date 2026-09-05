@@ -10,11 +10,20 @@ import re
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+from credit_risk.feature_contract import MODEL_FEATURE_ALLOWLIST
+
 EXPECTED_ENTITIES = {
     "training": ("applications", "borrower_profiles", "loan_outcomes"),
     "scoring": ("applications", "borrower_profiles"),
 }
 SCHEMA_VERSION = "1.0.0"
+VERTEX_INSTANCE_FIELDS = (
+    "loan_id",
+    "borrower_id",
+    "feature_date",
+    "feature_version",
+    *MODEL_FEATURE_ALLOWLIST,
+)
 
 
 class PermanentDataQualityError(RuntimeError):
@@ -216,6 +225,23 @@ def resolve_active_model(
     from airflow.providers.google.cloud.hooks.bigquery import BigQueryHook
 
     hook = BigQueryHook(use_legacy_sql=False, location=region)
+    return _resolve_active_model_with_hook(
+        hook=hook,
+        project_id=project_id,
+        region=region,
+        score_date=score_date,
+        model_version_override=model_version_override,
+    )
+
+
+def _resolve_active_model_with_hook(
+    *,
+    hook: Any,
+    project_id: str,
+    region: str,
+    score_date: str,
+    model_version_override: str | None,
+) -> dict[str, str]:
     override_filter = "AND model_version = @model_version" if model_version_override else ""
     query = f"""
         SELECT model_resource, model_version, feature_version
@@ -242,12 +268,20 @@ def resolve_active_model(
                 "parameterValue": {"value": model_version_override},
             }
         )
-    records = hook.get_records(query, parameters=parameters)
+    records = list(
+        _submit_query_job(
+            hook=hook,
+            project_id=project_id,
+            region=region,
+            sql=query,
+            parameters=parameters,
+        ).result()
+    )
     if len(records) != 1:
         raise PermanentDataQualityError(
             "No unique ACTIVE model assignment covers the requested logical score date"
         )
-    resource, version, feature_version = records[0]
+    resource, version, feature_version = tuple(records[0])
     return {
         "model_resource": str(resource),
         "model_version": str(version),
@@ -291,14 +325,42 @@ def normalize_vertex_predictions(
     if len(prediction_tables) != 1 or len(error_tables) > 1:
         raise PermanentDataQualityError("Vertex output does not contain one prediction table")
     prediction_table = prediction_tables[0]
+    _merge_vertex_prediction_output(
+        hook=hook,
+        project_id=project_id,
+        region=region,
+        source_dataset=source_dataset,
+        prediction_table=prediction_table,
+        error_table=error_tables[0] if error_tables else None,
+        score_date=score_date,
+        pipeline_run_id=pipeline_run_id,
+        model=model,
+    )
+
+
+def _merge_vertex_prediction_output(
+    *,
+    hook: Any,
+    project_id: str,
+    region: str,
+    source_dataset: str,
+    prediction_table: str,
+    error_table: str | None,
+    score_date: str,
+    pipeline_run_id: str,
+    model: dict[str, str],
+) -> None:
     errors_assertion = ""
-    if error_tables:
+    if error_table:
         errors_assertion = f"""
             ASSERT NOT EXISTS (
-              SELECT 1 FROM `{source_dataset}.{error_tables[0]}`
+              SELECT 1 FROM `{source_dataset}.{error_table}`
             ) AS 'VERTEX_PREDICTION_ERRORS_PRESENT';
         """
-    hook.run_query(
+    _submit_query_job(
+        hook=hook,
+        project_id=project_id,
+        region=region,
         sql=f"""
             {errors_assertion}
 
@@ -330,7 +392,7 @@ def normalize_vertex_predictions(
               scored_at = source.scored_at
             WHEN NOT MATCHED THEN INSERT ROW;
         """,
-        query_params=[
+        parameters=[
             _scalar_parameter("score_date", "STRING", score_date),
             _scalar_parameter("model_resource", "STRING", model["model_resource"]),
             _scalar_parameter("model_version", "STRING", model["model_version"]),
@@ -348,6 +410,129 @@ def _scalar_parameter(name: str, parameter_type: str, value: object) -> dict[str
     }
 
 
+def _query_configuration(
+    sql: str, parameters: list[dict[str, object]] | None = None
+) -> dict[str, object]:
+    query: dict[str, object] = {"query": sql, "useLegacySql": False}
+    if parameters:
+        query["parameterMode"] = "NAMED"
+        query["queryParameters"] = parameters
+    return {"query": query}
+
+
+def _submit_query_job(
+    *,
+    hook: Any,
+    project_id: str,
+    region: str,
+    sql: str,
+    parameters: list[dict[str, object]] | None = None,
+) -> Any:
+    """Submit a synchronous parameterized query through provider 19.5.0."""
+
+    return hook.insert_job(
+        configuration=_query_configuration(sql, parameters),
+        project_id=project_id,
+        location=region,
+        nowait=False,
+    )
+
+
+def _query_dataframe(
+    *,
+    hook: Any,
+    project_id: str,
+    region: str,
+    sql: str,
+    parameters: list[dict[str, object]],
+) -> Any:
+    rows = _submit_query_job(
+        hook=hook,
+        project_id=project_id,
+        region=region,
+        sql=sql,
+        parameters=parameters,
+    ).result()
+    return rows.to_dataframe(create_bqstorage_client=False)
+
+
+def vertex_batch_prediction_request(
+    *,
+    project_id: str,
+    region: str,
+    job_display_name: str,
+    model_resource: str,
+    bigquery_source: str,
+    bigquery_destination_prefix: str,
+    service_account: str,
+    labels: dict[str, str] | None = None,
+) -> dict[str, object]:
+    """Build a Vertex request that converts BigQuery rows to named objects."""
+
+    return {
+        "parent": f"projects/{project_id}/locations/{region}",
+        "batch_prediction_job": {
+            "display_name": job_display_name,
+            "model": model_resource,
+            "input_config": {
+                "instances_format": "bigquery",
+                "bigquery_source": {"input_uri": bigquery_source},
+            },
+            "instance_config": {
+                "instance_type": "object",
+                "included_fields": list(VERTEX_INSTANCE_FIELDS),
+            },
+            "output_config": {
+                "predictions_format": "bigquery",
+                "bigquery_destination": {"output_uri": bigquery_destination_prefix},
+            },
+            "service_account": service_account,
+            "labels": labels or {},
+        },
+    }
+
+
+def _submit_object_batch_prediction_with_hook(
+    *, hook: Any, request: dict[str, object], timeout_seconds: int = 4 * 60 * 60
+) -> str:
+    region = str(request["parent"]).rsplit("/", 1)[-1]
+    client = hook.get_job_service_client(region=region)
+    operation = client.create_batch_prediction_job(request=request)
+    job = operation.result(timeout=timeout_seconds)
+    return str(job.name)
+
+
+def submit_object_batch_prediction_job(
+    *,
+    project_id: str,
+    region: str,
+    job_display_name: str,
+    model: dict[str, str],
+    bigquery_source: str,
+    bigquery_destination_prefix: str,
+    service_account: str,
+    labels: dict[str, str] | None = None,
+    **_: Any,
+) -> str:
+    """Submit one BigQuery-backed Vertex job with object-shaped instances."""
+
+    from airflow.providers.google.cloud.hooks.vertex_ai.batch_prediction_job import (
+        BatchPredictionJobHook,
+    )
+
+    request = vertex_batch_prediction_request(
+        project_id=project_id,
+        region=region,
+        job_display_name=job_display_name,
+        model_resource=model["model_resource"],
+        bigquery_source=bigquery_source,
+        bigquery_destination_prefix=bigquery_destination_prefix,
+        service_account=service_account,
+        labels=labels,
+    )
+    return _submit_object_batch_prediction_with_hook(hook=BatchPredictionJobHook(), request=request)
+
+
 def compute_and_persist_drift(
     *, project_id: str, region: str, score_date: str, run_id: str, model_version: str, **_: Any
 ) -> dict[str, object]:
@@ -361,7 +546,10 @@ def compute_and_persist_drift(
     reference_end = current_date - timedelta(days=1)
     reference_start = current_date - timedelta(days=30)
     hook = BigQueryHook(use_legacy_sql=False, location=region)
-    feature_frame = hook.get_pandas_df(
+    feature_frame = _query_dataframe(
+        hook=hook,
+        project_id=project_id,
+        region=region,
         sql=f"""
             SELECT feature_date, annual_income, credit_score, home_ownership
             FROM `{project_id}.credit_risk_features.scoring_features`
@@ -372,7 +560,10 @@ def compute_and_persist_drift(
             _scalar_parameter("current_date", "DATE", current_date.isoformat()),
         ],
     )
-    score_frame = hook.get_pandas_df(
+    score_frame = _query_dataframe(
+        hook=hook,
+        project_id=project_id,
+        region=region,
         sql=f"""
             SELECT score_date, probability_of_default
             FROM `{project_id}.credit_risk_scoring.risk_scores`
@@ -468,23 +659,32 @@ def audit_failure_callback(context: dict[str, Any]) -> None:
         run_id = identity["pipeline_run_id"]
         project_id = Variable.get("gcp_project_id")
         region = Variable.get("gcp_region")
-        BigQueryHook(use_legacy_sql=False, location=region).run_query(
-            sql=f"""
-                UPDATE `{project_id}.credit_risk_audit.pipeline_runs`
-                SET status = 'FAILED', completed_at = CURRENT_TIMESTAMP()
-                WHERE run_id = @run_id
-                  AND DATE(logical_date) = @logical_date
-            """,
-            query_params=[
-                {
-                    "name": "run_id",
-                    "parameterType": {"type": "STRING"},
-                    "parameterValue": {"value": run_id},
-                },
-                _scalar_parameter(
-                    "logical_date", "DATE", context["logical_date"].date().isoformat()
-                ),
-            ],
+        _persist_failed_run(
+            hook=BigQueryHook(use_legacy_sql=False, location=region),
+            project_id=project_id,
+            region=region,
+            run_id=run_id,
+            logical_date=context["logical_date"].date().isoformat(),
         )
     except Exception:
         return
+
+
+def _persist_failed_run(
+    *, hook: Any, project_id: str, region: str, run_id: str, logical_date: str
+) -> None:
+    _submit_query_job(
+        hook=hook,
+        project_id=project_id,
+        region=region,
+        sql=f"""
+            UPDATE `{project_id}.credit_risk_audit.pipeline_runs`
+            SET status = 'FAILED', completed_at = CURRENT_TIMESTAMP()
+            WHERE run_id = @run_id
+              AND DATE(logical_date) = @logical_date
+        """,
+        parameters=[
+            _scalar_parameter("run_id", "STRING", run_id),
+            _scalar_parameter("logical_date", "DATE", logical_date),
+        ],
+    )

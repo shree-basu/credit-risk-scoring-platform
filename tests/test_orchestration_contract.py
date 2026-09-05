@@ -11,16 +11,64 @@ from pathlib import Path
 import pytest
 
 from dags.credit_risk_runtime import (
+    VERTEX_INSTANCE_FIELDS,
     PermanentDataQualityError,
+    _merge_vertex_prediction_output,
+    _persist_failed_run,
+    _query_dataframe,
+    _resolve_active_model_with_hook,
+    _submit_object_batch_prediction_with_hook,
     execution_identity,
     require_parent_model,
     source_batch_id,
     source_prefix,
     staging_table,
     validate_manifest_payload,
+    vertex_batch_prediction_request,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class _FakeRows(list):
+    def __init__(self, rows: list[tuple[object, ...]], frame: object | None = None) -> None:
+        super().__init__(rows)
+        self.frame = frame
+        self.to_dataframe_kwargs: dict[str, object] | None = None
+
+    def to_dataframe(self, **kwargs: object) -> object:
+        self.to_dataframe_kwargs = kwargs
+        return self.frame
+
+
+class _FakeJob:
+    def __init__(self, rows: _FakeRows) -> None:
+        self.rows = rows
+
+    def result(self) -> _FakeRows:
+        return self.rows
+
+
+class _FakeBigQueryHook:
+    def __init__(self, rows: _FakeRows | None = None) -> None:
+        self.rows = rows if rows is not None else _FakeRows([])
+        self.calls: list[dict[str, object]] = []
+
+    def insert_job(self, **kwargs: object) -> _FakeJob:
+        self.calls.append(kwargs)
+        return _FakeJob(self.rows)
+
+
+def _query_parameters(call: dict[str, object]) -> list[dict[str, object]]:
+    configuration = call["configuration"]
+    assert isinstance(configuration, dict)
+    query = configuration["query"]
+    assert isinstance(query, dict)
+    assert query["useLegacySql"] is False
+    assert query["parameterMode"] == "NAMED"
+    parameters = query["queryParameters"]
+    assert isinstance(parameters, list)
+    return parameters
 
 
 def _valid_manifest() -> tuple[bytes, dict[str, bytes], str]:
@@ -143,6 +191,149 @@ def test_runtime_import_does_not_import_cloud_sdks() -> None:
     assert not any(name.startswith("airflow.providers") for name in imported)
 
 
+def test_active_model_resolution_submits_bound_named_parameters() -> None:
+    hook = _FakeBigQueryHook(_FakeRows([("projects/p/locations/r/models/1", "2", "v1")]))
+    model = _resolve_active_model_with_hook(
+        hook=hook,
+        project_id="project-id",
+        region="us-central1",
+        score_date="2026-09-02",
+        model_version_override="2",
+    )
+
+    assert model == {
+        "model_resource": "projects/p/locations/r/models/1",
+        "model_version": "2",
+        "feature_version": "v1",
+    }
+    call = hook.calls[0]
+    assert call["project_id"] == "project-id"
+    assert call["location"] == "us-central1"
+    assert call["nowait"] is False
+    assert {item["name"] for item in _query_parameters(call)} == {
+        "score_date",
+        "model_version",
+    }
+
+
+def test_score_merge_uses_insert_job_and_preserves_replay_grain() -> None:
+    hook = _FakeBigQueryHook()
+    _merge_vertex_prediction_output(
+        hook=hook,
+        project_id="project-id",
+        region="us-central1",
+        source_dataset="project-id.vertex_output",
+        prediction_table="predictions_1",
+        error_table="errors_1",
+        score_date="2026-09-02",
+        pipeline_run_id="run-1",
+        model={
+            "model_resource": "projects/p/locations/r/models/1",
+            "model_version": "2",
+            "feature_version": "v1",
+        },
+    )
+
+    call = hook.calls[0]
+    query = call["configuration"]["query"]["query"]
+    assert "MERGE `project-id.credit_risk_scoring.risk_scores`" in query
+    assert "target.loan_id = source.loan_id" in query
+    assert "target.score_date = source.score_date" in query
+    assert "target.model_version = source.model_version" in query
+    assert {item["name"] for item in _query_parameters(call)} == {
+        "score_date",
+        "model_resource",
+        "model_version",
+        "feature_version",
+        "pipeline_run_id",
+    }
+
+
+def test_drift_query_converts_bound_job_results_to_pandas() -> None:
+    marker = object()
+    rows = _FakeRows([], frame=marker)
+    hook = _FakeBigQueryHook(rows)
+    frame = _query_dataframe(
+        hook=hook,
+        project_id="project-id",
+        region="us-central1",
+        sql="SELECT * FROM t WHERE feature_date = @current_date",
+        parameters=[
+            {
+                "name": "current_date",
+                "parameterType": {"type": "DATE"},
+                "parameterValue": {"value": "2026-09-02"},
+            }
+        ],
+    )
+
+    assert frame is marker
+    assert rows.to_dataframe_kwargs == {"create_bqstorage_client": False}
+    assert [item["name"] for item in _query_parameters(hook.calls[0])] == ["current_date"]
+
+
+def test_failure_audit_uses_bound_insert_job_update() -> None:
+    hook = _FakeBigQueryHook()
+    _persist_failed_run(
+        hook=hook,
+        project_id="project-id",
+        region="us-central1",
+        run_id="run-1",
+        logical_date="2026-09-02",
+    )
+
+    call = hook.calls[0]
+    assert "SET status = 'FAILED'" in call["configuration"]["query"]["query"]
+    assert {item["name"] for item in _query_parameters(call)} == {
+        "run_id",
+        "logical_date",
+    }
+
+
+def test_vertex_request_explicitly_submits_named_object_instances() -> None:
+    request = vertex_batch_prediction_request(
+        project_id="project-id",
+        region="us-central1",
+        job_display_name="daily-20260902",
+        model_resource="projects/project-id/locations/us-central1/models/1@2",
+        bigquery_source="bq://project-id.credit_risk_staging.vertex_input_1",
+        bigquery_destination_prefix="bq://project-id",
+        service_account="vertex@project-id.iam.gserviceaccount.com",
+        labels={"pipeline": "credit-risk"},
+    )
+    job = request["batch_prediction_job"]
+    assert job["instance_config"]["instance_type"] == "object"
+    assert job["instance_config"]["included_fields"] == list(VERTEX_INSTANCE_FIELDS)
+    assert "defaulted" not in VERTEX_INSTANCE_FIELDS
+    assert "age" not in VERTEX_INSTANCE_FIELDS
+    assert "loan_id" in VERTEX_INSTANCE_FIELDS
+    assert "borrower_id" in VERTEX_INSTANCE_FIELDS
+
+    class FakeOperation:
+        def result(self, timeout: int) -> object:
+            assert timeout == 4 * 60 * 60
+            return type("Job", (), {"name": "projects/p/locations/r/batchPredictionJobs/7"})()
+
+    class FakeClient:
+        submitted: dict[str, object] | None = None
+
+        def create_batch_prediction_job(self, *, request: dict[str, object]) -> FakeOperation:
+            self.submitted = request
+            return FakeOperation()
+
+    class FakeVertexHook:
+        client = FakeClient()
+
+        def get_job_service_client(self, *, region: str) -> FakeClient:
+            assert region == "us-central1"
+            return self.client
+
+    hook = FakeVertexHook()
+    job_name = _submit_object_batch_prediction_with_hook(hook=hook, request=request)
+    assert job_name.endswith("/7")
+    assert hook.client.submitted is request
+
+
 def test_dags_encode_logical_date_backfill_and_permanent_dq_contracts() -> None:
     daily = (ROOT / "dags" / "daily_scoring.py").read_text(encoding="utf-8")
     retraining = (ROOT / "dags" / "periodic_retraining.py").read_text(encoding="utf-8")
@@ -156,7 +347,7 @@ def test_dags_encode_logical_date_backfill_and_permanent_dq_contracts() -> None:
         assert "publish_quarantine" in source
         assert "expiration_timestamp" in source
     assert "resolve_active_model" in daily
-    assert "CreateBatchPredictionJobOperator" in daily
+    assert "submit_object_batch_prediction_job" in daily
     assert "CreateCustomContainerTrainingJobOperator" in retraining
     assert "is_default_version=False" in retraining
     assert 'key="model_id"' in retraining

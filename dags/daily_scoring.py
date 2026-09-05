@@ -8,9 +8,6 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.providers.google.cloud.operators.bigquery import BigQueryInsertJobOperator
 from airflow.providers.google.cloud.operators.dataproc import DataprocCreateBatchOperator
-from airflow.providers.google.cloud.operators.vertex_ai.batch_prediction_job import (
-    CreateBatchPredictionJobOperator,
-)
 from airflow.providers.google.cloud.sensors.gcs import GCSObjectExistenceSensor
 from credit_risk_runtime import (
     airflow_execution_identity,
@@ -20,6 +17,7 @@ from credit_risk_runtime import (
     normalize_vertex_predictions,
     quarantine_merge_sql,
     resolve_active_model,
+    submit_object_batch_prediction_job,
     validate_gcs_manifest,
 )
 
@@ -28,6 +26,7 @@ REGION = "{{ var.value.gcp_region }}"
 RAW_BUCKET = "{{ var.value.raw_bucket }}"
 ARTIFACT_BUCKET = "{{ var.value.artifact_bucket }}"
 SPARK_SERVICE_ACCOUNT = "{{ var.value.spark_service_account }}"
+VERTEX_SERVICE_ACCOUNT = "{{ var.value.vertex_service_account }}"
 
 SOURCE_ID = "{{ ti.xcom_pull(task_ids='source_identity') }}"
 EXECUTION_ID = "{{ ti.xcom_pull(task_ids='execution_identity') }}"
@@ -230,22 +229,24 @@ with DAG(
         },
         retries=0,
     )
-    vertex_batch_prediction = CreateBatchPredictionJobOperator(
+    vertex_batch_prediction = PythonOperator(
         task_id="vertex_batch_prediction",
-        project_id=PROJECT_ID,
-        region=REGION,
-        job_display_name="{{ ti.xcom_pull(task_ids='execution_identity')['cloud_job_id'] }}",
-        model_name="{{ ti.xcom_pull(task_ids='resolve_active_model')['model_resource'] }}",
-        instances_format="bigquery",
-        predictions_format="bigquery",
-        bigquery_source=(
-            "bq://{{ var.value.gcp_project_id }}.credit_risk_staging."
-            "vertex_input_{{ ti.xcom_pull(task_ids='execution_identity')['table_suffix'] }}"
-        ),
-        bigquery_destination_prefix="bq://{{ var.value.gcp_project_id }}",
-        labels={"pipeline": "credit-risk", "workload": "daily-scoring"},
-        deferrable=True,
-        poll_interval=30,
+        python_callable=submit_object_batch_prediction_job,
+        op_kwargs={
+            "project_id": PROJECT_ID,
+            "region": REGION,
+            "job_display_name": (
+                "{{ ti.xcom_pull(task_ids='execution_identity')['cloud_job_id'] }}"
+            ),
+            "model": MODEL,
+            "bigquery_source": (
+                "bq://{{ var.value.gcp_project_id }}.credit_risk_staging."
+                "vertex_input_{{ ti.xcom_pull(task_ids='execution_identity')['table_suffix'] }}"
+            ),
+            "bigquery_destination_prefix": "bq://{{ var.value.gcp_project_id }}",
+            "service_account": VERTEX_SERVICE_ACCOUNT,
+            "labels": {"pipeline": "credit-risk", "workload": "daily-scoring"},
+        },
         execution_timeout=timedelta(hours=4),
     )
     normalize_scores = PythonOperator(
@@ -254,10 +255,7 @@ with DAG(
         op_kwargs={
             "project_id": PROJECT_ID,
             "region": REGION,
-            "batch_prediction_job_id": (
-                "{{ ti.xcom_pull(task_ids='vertex_batch_prediction', "
-                "key='batch_prediction_job_id') }}"
-            ),
+            "batch_prediction_job_id": "{{ ti.xcom_pull(task_ids='vertex_batch_prediction') }}",
             "score_date": "{{ ds }}",
             "pipeline_run_id": (
                 "{{ ti.xcom_pull(task_ids='execution_identity')['pipeline_run_id'] }}"
